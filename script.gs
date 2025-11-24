@@ -41,42 +41,47 @@ function syncCalendars() {
       }
     }
     
-    const sourceIdToTargetIdMap = new Map();
+    // Create a map based on start time + end time combination (more reliable than event IDs)
+    const timeKeyToTargetBlockMap = new Map();
 
-    // Map existing blocks by their source event ID
+    // Map existing blocks by their time signature
     for (let i = 0; i < existingTargetBlocks.length; i++) {
       const block = existingTargetBlocks[i];
-      const description = block.getDescription();
-      if (description) {
-        const sourceIdMatch = description.match(/Source Event ID: (.+)/);
-        if (sourceIdMatch && sourceIdMatch[1]) {
-          sourceIdToTargetIdMap.set(sourceIdMatch[1], block);
-        } else {
-          // Delete blocks without proper source ID
-          block.deleteEvent();
-        }
+      const timeKey = block.getStartTime().getTime() + '_' + block.getEndTime().getTime();
+      
+      // If there's already a block with this time, keep the first one and delete duplicates
+      if (timeKeyToTargetBlockMap.has(timeKey)) {
+        Logger.log(`Deleting duplicate block at ${block.getStartTime()}`);
+        block.deleteEvent();
+      } else {
+        timeKeyToTargetBlockMap.set(timeKey, block);
       }
     }
     
     // 2. Get events from the source (personal) calendar.
     const sourceEvents = sourceCalendar.getEvents(startTime, endTime);
+    const processedTimeKeys = new Set();
     
     // 3. Process each event from the source calendar.
     for (let i = 0; i < sourceEvents.length; i++) {
       const sourceEvent = sourceEvents[i];
       const sourceEventId = sourceEvent.getId();
+      const timeKey = sourceEvent.getStartTime().getTime() + '_' + sourceEvent.getEndTime().getTime();
+      
+      processedTimeKeys.add(timeKey);
 
-      const existingBlock = sourceIdToTargetIdMap.get(sourceEventId);
+      const existingBlock = timeKeyToTargetBlockMap.get(timeKey);
 
       if (existingBlock) {
-        // Block exists, check if times need updating.
-        if (existingBlock.getStartTime().getTime() !== sourceEvent.getStartTime().getTime() ||
-            existingBlock.getEndTime().getTime() !== sourceEvent.getEndTime().getTime()) {
-          
-          existingBlock.setTime(sourceEvent.getStartTime(), sourceEvent.getEndTime());
-          Logger.log(`Updated busy block for source event: ${sourceEvent.getTitle()}`);
-        }
-        sourceIdToTargetIdMap.delete(sourceEventId); 
+        // Block already exists for this time slot
+        Logger.log(`Block already exists for time slot: ${sourceEvent.getStartTime()}`);
+        
+        // Update the description to ensure it has the latest source event ID
+        const description = `${BUSY_BLOCK_TITLE} - ${SYNC_TAG}\nSource Event ID: ${sourceEventId}`;
+        existingBlock.setDescription(description);
+        
+        // Remove from map so it won't be deleted later
+        timeKeyToTargetBlockMap.delete(timeKey);
 
       } else {
         // Block does not exist, create a new one.
@@ -93,17 +98,17 @@ function syncCalendars() {
         newEvent.setDescription(description);
         newEvent.setVisibility(CalendarApp.Visibility.PRIVATE);
         
-        Logger.log(`Created new busy block for source event: ${sourceEvent.getTitle()}`);
+        Logger.log(`Created new busy block for source event: ${sourceEvent.getTitle()} at ${sourceEvent.getStartTime()}`);
       }
     }
     
-    // 4. Delete any remaining target blocks whose corresponding source event no longer exists.
-    sourceIdToTargetIdMap.forEach(function(block) {
-      Logger.log(`Deleting expired busy block: ${block.getTitle()}`);
+    // 4. Delete any remaining target blocks whose time slots no longer have corresponding source events.
+    timeKeyToTargetBlockMap.forEach(function(block, timeKey) {
+      Logger.log(`Deleting expired busy block at: ${block.getStartTime()}`);
       block.deleteEvent();
     });
 
-    Logger.log("Calendar sync complete.");
+    Logger.log("Calendar sync complete. Processed " + sourceEvents.length + " source events.");
 
   } catch (e) {
     Logger.log("An error occurred during synchronization: " + e.toString());
