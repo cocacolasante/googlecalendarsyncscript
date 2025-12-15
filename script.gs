@@ -7,9 +7,9 @@
 // ====================================================================
 // --- CONFIGURATION ---
 // ====================================================================
-const SOURCE_CALENDAR_ID = 'source@gmail.com';
-const TARGET_CALENDAR_ID = 'source@gmail.com';
-const SYNC_LOOK_AHEAD_DAYS = 14;  // Reduced from 60 to save quota
+const SOURCE_CALENDAR_ID = 'source@email.com';
+const TARGET_CALENDAR_ID = 'target@email.com';
+const SYNC_LOOK_AHEAD_DAYS = 14;  
 const BUSY_BLOCK_TITLE = "Personal Time Block";
 
 /**
@@ -25,16 +25,22 @@ function syncCalendars() {
       return;
     }
 
-    const now = new Date();
-    const startTime = new Date(now.getTime());
-    const endTime = new Date(now.getTime());
+    // Start from beginning of today (midnight)
+    const startTime = new Date();
+    startTime.setHours(0, 0, 0, 0);
+    
+    // End at the last moment of the day X days from now
+    const endTime = new Date();
     endTime.setDate(endTime.getDate() + SYNC_LOOK_AHEAD_DAYS);
+    endTime.setHours(23, 59, 59, 999);
     
     Logger.log(`Syncing from ${startTime.toDateString()} to ${endTime.toDateString()}`);
     
     // Get events from both calendars
     const sourceEvents = sourceCalendar.getEvents(startTime, endTime);
     const targetEvents = targetCalendar.getEvents(startTime, endTime);
+    
+    Logger.log(`Found ${sourceEvents.length} events on personal calendar`);
     
     // Filter target events to only our sync blocks
     const existingBlocks = [];
@@ -44,7 +50,7 @@ function syncCalendars() {
       }
     }
     
-    Logger.log(`Source events: ${sourceEvents.length}, Existing blocks: ${existingBlocks.length}`);
+    Logger.log(`Found ${existingBlocks.length} existing blocks on business calendar`);
     
     // Create time-based map of existing blocks
     const existingBlockTimes = new Map();
@@ -75,13 +81,16 @@ function syncCalendars() {
       const timeKey = sourceEvent.getStartTime().getTime() + '_' + sourceEvent.getEndTime().getTime();
       
       if (!existingBlockTimes.has(timeKey)) {
-        targetCalendar.createEvent(
+        const newEvent = targetCalendar.createEvent(
           BUSY_BLOCK_TITLE,
           sourceEvent.getStartTime(),
           sourceEvent.getEndTime()
         );
+        newEvent.setVisibility(CalendarApp.Visibility.PRIVATE);
         created++;
-        Logger.log(`Created block for ${sourceEvent.getStartTime().toLocaleString()}`);
+        Logger.log(`Created block for ${sourceEvent.getTitle()} on ${sourceEvent.getStartTime().toLocaleString()}`);
+      } else {
+        Logger.log(`Block already exists for ${sourceEvent.getStartTime().toLocaleString()}`);
       }
     }
     
@@ -95,11 +104,59 @@ function syncCalendars() {
       }
     });
 
-    Logger.log(`Sync complete. Created: ${created}, Deleted: ${deleted}`);
+    Logger.log(`=== SYNC COMPLETE ===`);
+    Logger.log(`Created: ${created} new blocks`);
+    Logger.log(`Deleted: ${deleted} expired blocks`);
+    Logger.log(`Total personal events: ${sourceEvents.length}`);
+    Logger.log(`Total business blocks after sync: ${sourceEvents.length}`);
 
   } catch (e) {
     Logger.log("Error: " + e.toString());
+    Logger.log("Stack: " + e.stack);
   }
+}
+
+/**
+ * Test function to check what events exist
+ */
+function testCheckEvents() {
+  const sourceCalendar = CalendarApp.getCalendarById(SOURCE_CALENDAR_ID);
+  const targetCalendar = CalendarApp.getCalendarById(TARGET_CALENDAR_ID);
+  
+  const startTime = new Date();
+  startTime.setHours(0, 0, 0, 0);
+  
+  const endTime = new Date();
+  endTime.setDate(endTime.getDate() + 7);  // Check next 7 days
+  endTime.setHours(23, 59, 59, 999);
+  
+  Logger.log(`\n=== CHECKING EVENTS FROM ${startTime.toDateString()} TO ${endTime.toDateString()} ===\n`);
+  
+  const sourceEvents = sourceCalendar.getEvents(startTime, endTime);
+  Logger.log(`\n--- PERSONAL CALENDAR (${sourceEvents.length} events) ---`);
+  for (let i = 0; i < sourceEvents.length; i++) {
+    const event = sourceEvents[i];
+    Logger.log(`${event.getStartTime().toLocaleString()} - ${event.getTitle()}`);
+  }
+  
+  const targetEvents = targetCalendar.getEvents(startTime, endTime);
+  const blocks = [];
+  for (let i = 0; i < targetEvents.length; i++) {
+    if (targetEvents[i].getTitle() === BUSY_BLOCK_TITLE) {
+      blocks.push(targetEvents[i]);
+    }
+  }
+  
+  Logger.log(`\n--- BUSINESS CALENDAR (${blocks.length} blocks) ---`);
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    Logger.log(`${block.getStartTime().toLocaleString()} - ${block.getTitle()}`);
+  }
+  
+  Logger.log(`\n=== SUMMARY ===`);
+  Logger.log(`Personal events: ${sourceEvents.length}`);
+  Logger.log(`Business blocks: ${blocks.length}`);
+  Logger.log(`Missing blocks: ${sourceEvents.length - blocks.length}`);
 }
 
 /**
@@ -118,43 +175,6 @@ function createTrigger() {
       .everyMinutes(30)
       .create();
   Logger.log("Trigger created: runs every 30 minutes");
-}
-
-/**
- * One-time cleanup function to remove all existing duplicate blocks.
- * Run this manually once, then delete it or comment it out.
- */
-function cleanupAllDuplicates() {
-  try {
-    const targetCalendar = CalendarApp.getCalendarById(TARGET_CALENDAR_ID);
-    
-    const startTime = new Date();
-    const endTime = new Date();
-    endTime.setDate(endTime.getDate() + SYNC_LOOK_AHEAD_DAYS);
-    
-    const allEvents = targetCalendar.getEvents(startTime, endTime);
-    const timeKeyMap = new Map();
-    let deletedCount = 0;
-    
-    for (let i = 0; i < allEvents.length; i++) {
-      const event = allEvents[i];
-      if (event.getTitle() === BUSY_BLOCK_TITLE) {
-        const timeKey = event.getStartTime().getTime() + '_' + event.getEndTime().getTime();
-        
-        if (timeKeyMap.has(timeKey)) {
-          Logger.log(`Deleting duplicate at ${event.getStartTime()}`);
-          event.deleteEvent();
-          deletedCount++;
-        } else {
-          timeKeyMap.set(timeKey, event);
-        }
-      }
-    }
-    
-    Logger.log(`Cleanup complete. Deleted ${deletedCount} duplicate blocks.`);
-  } catch (e) {
-    Logger.log("Cleanup error: " + e.toString());
-  }
 }
 
 /**
